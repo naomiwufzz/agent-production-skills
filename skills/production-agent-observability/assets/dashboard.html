@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Observability Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #1a1d24; --panel2: #232833; --border: #2c313c;
+    --fg: #e6e9ef; --muted: #8b93a3; --accent: #4c8bf5; --ok: #3fb950;
+    --warn: #d29922; --err: #f85149; --turn: #4c8bf5; --step: #3fb950; --tool: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 13px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  header { padding: 12px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap; background: var(--panel); }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  header .meta b { color: var(--fg); font-weight: 600; }
+  .btns { margin-left: auto; display: flex; gap: 8px; }
+  button.load { background: var(--panel2); color: var(--fg); border: 1px solid var(--border);
+    padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+  button.load:hover { background: var(--accent); border-color: var(--accent); }
+  #drop { margin: 40px auto; max-width: 640px; padding: 60px 40px; text-align: center;
+    border: 2px dashed var(--border); border-radius: 12px; color: var(--muted); }
+  #drop.hot { border-color: var(--accent); color: var(--fg); background: rgba(76,139,245,.08); }
+  #drop h2 { color: var(--fg); font-weight: 600; margin: 0 0 8px; }
+  #drop code { background: var(--panel2); padding: 2px 6px; border-radius: 4px; color: var(--accent); }
+  .tabs { display: flex; gap: 2px; padding: 0 20px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  .tab { padding: 10px 16px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; }
+  .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+  .view { padding: 20px; display: none; }
+  .view.active { display: block; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .card h3 { margin: 0 0 12px; font-size: 13px; color: var(--accent); }
+  .kv { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--panel2); }
+  .kv:last-child { border-bottom: none; }
+  .kv .k { color: var(--muted); } .kv .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .bar-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+  .bar-row .lbl { width: 120px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar-row .bar { height: 14px; background: var(--tool); border-radius: 3px; min-width: 2px; }
+  .bar-row .n { font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--panel2); }
+  th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .sev-error { color: var(--err); } .sev-warn { color: var(--warn); } .sev-info { color: var(--muted); }
+  .filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .filters select, .filters input { background: var(--panel2); color: var(--fg); border: 1px solid var(--border);
+    padding: 5px 8px; border-radius: 6px; font-size: 12px; }
+  .filters input { flex: 1; min-width: 160px; }
+  .log-row { cursor: pointer; } .log-row:hover { background: var(--panel2); }
+  .log-body { display: none; } .log-body.open { display: table-row; }
+  .log-body pre { margin: 0; padding: 10px; background: #0b0d11; border-radius: 6px; overflow-x: auto;
+    font-size: 11px; color: #c9d1d9; white-space: pre-wrap; word-break: break-word; max-height: 400px; }
+  #traceWrap { overflow-x: auto; }
+  .lane-hd { color: var(--muted); font-size: 11px; margin: 14px 0 4px; }
+  .span { position: absolute; height: 16px; border-radius: 3px; font-size: 10px; color: #fff;
+    padding: 0 4px; overflow: hidden; white-space: nowrap; line-height: 16px; cursor: default; }
+  .span:hover { outline: 1px solid #fff; }
+  .axis { color: var(--muted); font-size: 10px; border-top: 1px solid var(--border); margin-top: 8px; padding-top: 4px; }
+  .hidden { display: none; }
+  #tip { position: fixed; background: #000; border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; font-size: 11px; pointer-events: none; display: none; max-width: 420px; z-index: 99;
+    white-space: pre-wrap; word-break: break-word; }
+</style>
+</head>
+<body>
+<header class="hidden" id="hd">
+  <h1>Agent Observability</h1>
+  <div class="meta" id="hdMeta"></div>
+  <div class="btns">
+    <button class="load" id="btnDir">选文件夹</button>
+    <button class="load" id="btnFiles">选文件</button>
+  </div>
+</header>
+<div class="tabs hidden" id="tabs">
+  <div class="tab active" data-v="metrics">Metrics</div>
+  <div class="tab" data-v="trace">Trace</div>
+  <div class="tab" data-v="logs">Logs</div>
+</div>
+
+<div id="drop">
+  <h2>拖入 runId 文件夹，或三个文件</h2>
+  <p>把 <code>&lt;outputDir&gt;/&lt;runId&gt;/</code> 目录（含 <code>logs.ndjson</code> / <code>trace.json</code> / <code>metrics.json</code>）拖到这里，<br>或点右上按钮选择。全程离线，数据不出本机。</p>
+  <div class="btns" style="justify-content:center;margin-top:16px">
+    <button class="load" id="btnDir2">选文件夹</button>
+    <button class="load" id="btnFiles2">选文件</button>
+  </div>
+</div>
+
+<div class="view" id="v-metrics"></div>
+<div class="view" id="v-trace"><div id="traceWrap"></div></div>
+<div class="view" id="v-logs">
+  <div class="filters">
+    <select id="fSev"><option value="">全部级别</option><option>error</option><option>warn</option><option>info</option></select>
+    <select id="fType"><option value="">全部事件类型</option></select>
+    <select id="fSess"><option value="">全部 session</option></select>
+    <input id="fText" placeholder="搜索 body / attributes 文本…">
+    <span class="meta" id="logCount" style="align-self:center;color:var(--muted)"></span>
+  </div>
+  <table><thead><tr>
+    <th>时间</th><th>session</th><th class="num">seq</th><th>event.type</th><th>severity</th>
+  </tr></thead><tbody id="logBody"></tbody></table>
+</div>
+
+<div id="tip"></div>
+
+<input type="file" id="fileInput" multiple class="hidden" accept=".json,.ndjson">
+<input type="file" id="dirInput" webkitdirectory class="hidden">
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const state = { metrics: null, trace: null, logs: [] };
+
+// ---------- 文件加载 ----------
+async function ingestFiles(files) {
+  for (const f of files) {
+    const name = (f.name || '').toLowerCase();
+    const text = await f.text();
+    if (name.endsWith('metrics.json')) state.metrics = JSON.parse(text);
+    else if (name.endsWith('trace.json')) state.trace = JSON.parse(text);
+    else if (name.endsWith('logs.ndjson') || name.endsWith('.ndjson')) {
+      state.logs = text.split('\n').filter(l => l.trim()).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    }
+  }
+  render();
+}
+
+function render() {
+  if (!state.metrics && !state.trace && !state.logs.length) return;
+  $('#drop').classList.add('hidden');
+  $('#hd').classList.remove('hidden');
+  $('#tabs').classList.remove('hidden');
+  const m = state.metrics;
+  const dur = m ? ((m.wallEnd - m.wallStart) / 1000).toFixed(1) + 's' : '—';
+  const sess = m ? Object.keys(m.sessions || {}).length : new Set(state.logs.map(r => r.attributes?.['session.id'])).size;
+  $('#hdMeta').innerHTML = `runId <b>${m?.runId ?? '(未加载 metrics)'}</b> · 时长 <b>${dur}</b> · <b>${sess}</b> 个 session · <b>${state.logs.length}</b> 条事件`;
+  renderMetrics(); renderTrace(); renderLogs();
+}
+// ---------- Metrics ----------
+function renderMetrics() {
+  const el = $('#v-metrics');
+  if (!state.metrics) { el.innerHTML = '<p class="meta">未加载 metrics.json</p>'; return; }
+  const sessions = state.metrics.sessions || {};
+  const ids = Object.keys(sessions);
+  if (!ids.length) { el.innerHTML = '<p class="meta">metrics 中无 session</p>'; return; }
+  const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  let html = '<div class="grid">';
+  for (const id of ids) {
+    const s = sessions[id];
+    const t = s.tokens || {}, c = s.counts || {}, lat = s.latencyMs || {}, err = s.errors || {};
+    const tools = c.toolCalls || {};
+    const maxTool = Math.max(1, ...Object.values(tools));
+    const toolBars = Object.entries(tools).sort((a, b) => b[1] - a[1]).map(([n, v]) =>
+      `<div class="bar-row"><span class="lbl" title="${esc(n)}">${esc(n)}</span><span class="bar" style="width:${(v / maxTool * 140) | 0}px"></span><span class="n">${v}</span></div>`).join('') || '<span class="meta">无工具调用</span>';
+    const latRow = (k, b) => b ? `<tr><td>${k}</td><td class="num">${b.p50}</td><td class="num">${b.p95}</td><td class="num">${b.max}</td><td class="num">${b.count}</td></tr>` : '';
+    html += `<div class="card"><h3>session ${esc(id)}</h3>
+      <div class="kv"><span class="k">Tokens 输入 / 输出</span><span class="v">${t.input ?? 0} / ${t.output ?? 0}</span></div>
+      <div class="kv"><span class="k">Tokens 合计</span><span class="v">${t.total ?? 0}</span></div>
+      <div class="kv"><span class="k">缓存读 / 写</span><span class="v">${t.cacheRead ?? 0} / ${t.cacheWrite ?? 0}</span></div>
+      <div class="kv"><span class="k">推理 tokens</span><span class="v">${t.reasoning ?? 0}</span></div>
+      <div class="kv"><span class="k">turn / step</span><span class="v">${c.turns ?? 0} / ${c.steps ?? 0}</span></div>
+      <div class="kv"><span class="k">turn 错误率</span><span class="v" style="color:${err.turnErrorRate ? 'var(--err)' : 'var(--ok)'}">${((err.turnErrorRate ?? 0) * 100).toFixed(1)}% (${err.turnErrors ?? 0})</span></div>
+      <div class="kv"><span class="k">tool 错误</span><span class="v" style="color:${err.toolErrors ? 'var(--err)' : 'var(--ok)'}">${err.toolErrors ?? 0}</span></div>
+      <h3 style="margin-top:14px">时延 (ms)</h3>
+      <table><thead><tr><th></th><th class="num">p50</th><th class="num">p95</th><th class="num">max</th><th class="num">n</th></tr></thead>
+        <tbody>${latRow('turn', lat.turn)}${latRow('step', lat.step)}${latRow('tool', lat.tool)}</tbody></table>
+      <h3 style="margin-top:14px">工具调用次数</h3>${toolBars}
+    </div>`;
+  }
+  el.innerHTML = html + '</div>';
+}
+
+// ---------- Trace (SVG 甘特) ----------
+function renderTrace() {
+  const wrap = $('#traceWrap');
+  if (!state.trace || !Array.isArray(state.trace.traceEvents)) { wrap.innerHTML = '<p class="meta">未加载 trace.json</p>'; return; }
+  const evs = state.trace.traceEvents;
+  // 按 (pid,tid) 用栈配对 B/E → span{name,start,end,depth,args}
+  const byLane = new Map(); // pid -> tid -> {stack, spans}
+  let tMin = Infinity, tMax = -Infinity;
+  for (const e of evs) {
+    if (typeof e.ts !== 'number') continue;
+    tMin = Math.min(tMin, e.ts); tMax = Math.max(tMax, e.ts);
+    const pid = String(e.pid), tid = String(e.tid ?? 0);
+    if (!byLane.has(pid)) byLane.set(pid, new Map());
+    const lanes = byLane.get(pid);
+    if (!lanes.has(tid)) lanes.set(tid, { stack: [], spans: [] });
+    const L = lanes.get(tid);
+    if (e.ph === 'B') L.stack.push({ name: e.name, start: e.ts, depth: L.stack.length, args: e.args });
+    else if (e.ph === 'E') { const b = L.stack.pop(); if (b) { b.end = e.ts; b.endArgs = e.args; L.spans.push(b); } }
+  }
+  if (!isFinite(tMin)) { wrap.innerHTML = '<p class="meta">trace 无事件</p>'; return; }
+  const span = Math.max(1, tMax - tMin);
+  const W = Math.max(900, wrap.clientWidth - 40), rowH = 20;
+  const colors = { turn: 'var(--turn)', step: 'var(--step)' };
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  let html = '';
+  for (const [pid, lanes] of byLane) {
+    html += `<div class="lane-hd">session ${esc(pid)}</div>`;
+    for (const [tid, L] of lanes) {
+      const maxDepth = Math.max(0, ...L.spans.map(s => s.depth)) + 1;
+      const h = maxDepth * rowH + 4;
+      html += `<div style="position:relative;height:${h}px;margin-bottom:6px">`;
+      for (const sp of L.spans) {
+        const x = (sp.start - tMin) / span * W;
+        const w = Math.max(2, ((sp.end ?? sp.start) - sp.start) / span * W);
+        const dur = (((sp.end ?? sp.start) - sp.start) / 1000).toFixed(1);
+        const base = sp.name.startsWith('turn') ? colors.turn : sp.name.startsWith('step') ? colors.step : 'var(--tool)';
+        const tip = `${sp.name}\n耗时 ${dur} ms` + (sp.args ? '\nargs: ' + esc(JSON.stringify(sp.args)).slice(0, 300) : '') + (sp.endArgs ? '\n结果: ' + esc(JSON.stringify(sp.endArgs)) : '');
+        html += `<div class="span" style="left:${x}px;top:${sp.depth * rowH}px;width:${w}px;background:${base}" data-tip="${tip.replace(/"/g, '&quot;')}">${esc(sp.name)} ${dur}ms</div>`;
+      }
+      html += '</div>';
+    }
+  }
+  html += `<div class="axis">总跨度 ${((tMax - tMin) / 1000).toFixed(1)} ms（左=最早事件，右=最晚）</div>`;
+  wrap.innerHTML = html;
+}
+// ---------- Logs ----------
+function renderLogs() {
+  const rows = state.logs;
+  const types = [...new Set(rows.map(r => r.attributes?.['event.type']).filter(Boolean))].sort();
+  const sess = [...new Set(rows.map(r => r.attributes?.['session.id']).filter(Boolean))].sort();
+  const fType = $('#fType'), fSess = $('#fSess');
+  if (fType.options.length <= 1) for (const t of types) fType.add(new Option(t, t));
+  if (fSess.options.length <= 1) for (const s of sess) fSess.add(new Option(s, s));
+  applyLogFilter();
+}
+
+function applyLogFilter() {
+  const sev = $('#fSev').value, type = $('#fType').value, sess = $('#fSess').value, q = $('#fText').value.toLowerCase();
+  const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const out = [];
+  let shown = 0;
+  for (let i = 0; i < state.logs.length; i++) {
+    const r = state.logs[i];
+    const a = r.attributes || {};
+    if (sev && r.severity !== sev) continue;
+    if (type && a['event.type'] !== type) continue;
+    if (sess && a['session.id'] !== sess) continue;
+    if (q) { const hay = (JSON.stringify(r.body) + JSON.stringify(a)).toLowerCase(); if (!hay.includes(q)) continue; }
+    shown++;
+    const time = new Date(r.time).toLocaleTimeString('zh-CN', { hour12: false }) + '.' + String(r.time % 1000).padStart(3, '0');
+    const sid = String(a['session.id'] ?? '').replace(/^session-/, '').slice(0, 8);
+    out.push(`<tr class="log-row" data-i="${i}"><td>${time}</td><td title="${esc(a['session.id'] ?? '')}">${esc(sid)}</td><td class="num">${a['event.seq'] ?? ''}</td><td>${esc(a['event.type'] ?? (r.channel === 'ops' ? '(ops)' : ''))}</td><td class="sev-${r.severity}">${esc(r.severity ?? '')}</td></tr>`);
+    out.push(`<tr class="log-body" data-body="${i}"><td colspan="5"><pre>${esc(JSON.stringify(r.body, null, 2))}</pre></td></tr>`);
+  }
+  $('#logBody').innerHTML = out.join('');
+  $('#logCount').textContent = `显示 ${shown} / ${state.logs.length}`;
+}
+
+// ---------- 事件绑定 ----------
+$('#logBody').addEventListener('click', e => {
+  const row = e.target.closest('.log-row'); if (!row) return;
+  const body = document.querySelector(`.log-body[data-body="${row.dataset.i}"]`);
+  if (body) body.classList.toggle('open');
+});
+for (const id of ['#fSev', '#fType', '#fSess']) $(id).addEventListener('change', applyLogFilter);
+$('#fText').addEventListener('input', applyLogFilter);
+
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  $('#v-' + t.dataset.v).classList.add('active');
+}));
+$('#v-metrics').classList.add('active');
+
+// trace tooltip
+const tip = $('#tip');
+$('#traceWrap').addEventListener('mousemove', e => {
+  const sp = e.target.closest('.span');
+  if (sp && sp.dataset.tip) { tip.textContent = sp.dataset.tip; tip.style.display = 'block'; tip.style.left = (e.clientX + 12) + 'px'; tip.style.top = (e.clientY + 12) + 'px'; }
+  else tip.style.display = 'none';
+});
+$('#traceWrap').addEventListener('mouseleave', () => tip.style.display = 'none');
+
+// 文件选择
+$('#fileInput').addEventListener('change', e => ingestFiles([...e.target.files]));
+$('#dirInput').addEventListener('change', e => ingestFiles([...e.target.files]));
+for (const id of ['#btnFiles', '#btnFiles2']) $(id).addEventListener('click', () => $('#fileInput').click());
+for (const id of ['#btnDir', '#btnDir2']) $(id).addEventListener('click', () => $('#dirInput').click());
+
+// 拖拽
+const drop = $('#drop');
+['dragenter', 'dragover'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('hot'); }));
+['dragleave', 'drop'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); if (ev === 'dragleave' && e.relatedTarget) return; drop.classList.remove('hot'); }));
+document.addEventListener('drop', async e => {
+  e.preventDefault();
+  const items = e.dataTransfer.items;
+  const files = [];
+  if (items && items.length && items[0].webkitGetAsEntry) {
+    const walk = entry => new Promise(res => {
+      if (entry.isFile) entry.file(f => res([f]));
+      else if (entry.isDirectory) {
+        const rd = entry.createReader();
+        rd.readEntries(async ents => { const all = await Promise.all([...ents].map(walk)); res(all.flat()); });
+      } else res([]);
+    });
+    const roots = [...items].map(it => it.webkitGetAsEntry && it.webkitGetAsEntry()).filter(Boolean);
+    for (const r of roots) files.push(...await walk(r));
+  }
+  if (files.length) ingestFiles(files);
+  else if (e.dataTransfer.files.length) ingestFiles([...e.dataTransfer.files]);
+});
+</script>
+
+
+
+</body>
+</html>

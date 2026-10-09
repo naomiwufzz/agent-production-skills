@@ -1,0 +1,4 @@
+interface:
+  display_name: "工具权限系统"
+  short_description: "为 agent 工具设计分层、可配置的权限流水线。"
+  default_prompt: "为我的 agent 设计一套分层的工具权限系统,包含 allow/deny/ask 规则、工具级 checkPermissions、免疫 bypass 的安全检查,以及 hook 系统。"
